@@ -209,16 +209,14 @@ def home():
 def health():
     return "OK", 200
 
-# ===== MAIN =====
+SERVICE_URL = os.getenv("SERVICE_URL")
+
 if __name__ == "__main__":
     bot.remove_webhook()
     time.sleep(2)
-
-    webhook_url = f"{SERVICE_URL}/{BOT_TOKEN}"
-    bot.set_webhook(url=webhook_url)
-    print("✅ Webhook:", webhook_url)
-
-    app.run(
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000))
+    bot.set_webhook(
+        url=f"{SERVICE_URL}/{BOT_TOKEN}"
     )
+    print(f"✅ Webhook: {SERVICE_URL}/{BOT_TOKEN}")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+

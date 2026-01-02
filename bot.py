@@ -8,33 +8,33 @@ from collections import defaultdict
 from flask import Flask, request
 import telebot
 
-# ===== ENV =====
+# ================== ENV ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("API_KEY")
-SERVICE_URL = os.getenv("SERVICE_URL")  # https://xxx.onrender.com
+SERVICE_URL = os.getenv("SERVICE_URL")  # https://sms-cip0.onrender.com
 BASE_URL = "https://365otp.com/apiv1"
 
 if not BOT_TOKEN or not API_KEY or not SERVICE_URL:
     raise RuntimeError("❌ Thiếu BOT_TOKEN / API_KEY / SERVICE_URL")
 
-# ===== LOG =====
+# ================== LOG ==================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OTP-BOT")
 
-# ===== BOT + FLASK =====
+# ================== BOT + FLASK ==========
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
 
-# ===== STORAGE =====
+# ================== STORAGE ==============
 user_orders = defaultdict(int)
 
-# ===== HTTP SESSION =====
+# ================== HTTP SESSION =========
 session = requests.Session()
 session.headers.update({
     "User-Agent": "365OTP-TelegramBot/1.0"
 })
 
-# ===== API =====
+# ================== API ==================
 def api_get(endpoint, params=None):
     try:
         params = params or {}
@@ -71,7 +71,7 @@ def send_zalo_sms(order_id):
 def continue_order(order_id):
     return api_get("continueorder", {"orderId": order_id})
 
-# ===== AUTO CHECK OTP =====
+# ================== AUTO CHECK OTP =======
 def auto_check(chat_id, order_id):
     for _ in range(30):  # ~150s
         time.sleep(5)
@@ -85,7 +85,7 @@ def auto_check(chat_id, order_id):
                 )
                 return
 
-# ===== BOT COMMAND =====
+# ================== BOT HANDLER ==========
 @bot.message_handler(commands=["start"])
 def start(message):
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -136,9 +136,7 @@ def process_create(message):
         send_sms = "true" in parts
 
         for p in parts[2:]:
-            if p.isdigit():
-                continue
-            if p == "true":
+            if p in ("true",):
                 continue
             if not network_id:
                 network_id = p
@@ -160,7 +158,8 @@ def process_create(message):
             ).start()
         else:
             bot.reply_to(message, r.get("message"))
-    except:
+    except Exception as e:
+        logger.error(e)
         bot.reply_to(message, "❌ Sai định dạng")
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Kiểm tra")
@@ -194,29 +193,32 @@ def cont(message):
         r = continue_order(user_orders[message.chat.id])
         bot.reply_to(message, "✅ Đã tiếp tục" if r.get("status") == 1 else r.get("message"))
 
-# ===== WEBHOOK =====
+# ================== WEBHOOK ==============
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.get_json())
+def telegram_webhook():
+    update = telebot.types.Update.de_json(request.get_json(force=True))
     bot.process_new_updates([update])
     return "OK", 200
 
-@app.route("/")
+# ===== Endpoint cho UptimeRobot =====
+@app.route("/", methods=["GET"])
 def home():
-    return "BOT OTP đang chạy!", 200
+    return "BOT OTP đang chạy 24/7", 200
 
-@app.route("/health")
+@app.route("/health", methods=["GET"])
 def health():
     return "OK", 200
 
-SERVICE_URL = os.getenv("SERVICE_URL")
-
+# ================== RUN ==================
 if __name__ == "__main__":
     bot.remove_webhook()
     time.sleep(2)
-    bot.set_webhook(
-        url=f"{SERVICE_URL}/{BOT_TOKEN}"
+
+    bot.set_webhook(url=f"{SERVICE_URL}/{BOT_TOKEN}")
+    print(f"✅ Webhook set: {SERVICE_URL}/{BOT_TOKEN}")
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
     )
-    print(f"✅ Webhook: {SERVICE_URL}/{BOT_TOKEN}")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 

@@ -4,31 +4,37 @@ import time
 import threading
 import logging
 import requests
-import telebot
 from collections import defaultdict
+from flask import Flask, request
+import telebot
 
-# ================= CONFIG =================
+# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("API_KEY")
+SERVICE_URL = os.getenv("SERVICE_URL")  # https://xxx.onrender.com
 BASE_URL = "https://365otp.com/apiv1"
 
-# ================= LOG ====================
+if not BOT_TOKEN or not API_KEY or not SERVICE_URL:
+    raise RuntimeError("❌ Thiếu BOT_TOKEN / API_KEY / SERVICE_URL")
+
+# ===== LOG =====
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OTP-BOT")
 
-# ================= BOT ====================
+# ===== BOT + FLASK =====
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+app = Flask(__name__)
 
-# ================= STORAGE ================
+# ===== STORAGE =====
 user_orders = defaultdict(int)
 
-# ================= HTTP SESSION ===========
+# ===== HTTP SESSION =====
 session = requests.Session()
 session.headers.update({
     "User-Agent": "365OTP-TelegramBot/1.0"
 })
 
-# ================= API FUNCTIONS ==========
+# ===== API =====
 def api_get(endpoint, params=None):
     try:
         params = params or {}
@@ -65,9 +71,9 @@ def send_zalo_sms(order_id):
 def continue_order(order_id):
     return api_get("continueorder", {"orderId": order_id})
 
-# ================= AUTO CHECK OTP =========
+# ===== AUTO CHECK OTP =====
 def auto_check(chat_id, order_id):
-    for _ in range(30):  # 150s
+    for _ in range(30):  # ~150s
         time.sleep(5)
         r = check_order(order_id)
         if r.get("status") == 1:
@@ -75,38 +81,49 @@ def auto_check(chat_id, order_id):
             if data.get("code"):
                 bot.send_message(
                     chat_id,
-                    f"🎉 OTP ve!\n\n🔑 {data['code']}"
+                    f"🎉 OTP về!\n\n🔑 {data['code']}"
                 )
                 return
 
-# ================= BOT COMMANDS ===========
+# ===== BOT COMMAND =====
 @bot.message_handler(commands=["start"])
 def start(message):
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("💰 So du", "📋 Dich vu")
-    kb.add("📱 Tao don", "🔍 Kiem tra")
-    kb.add("📞 Zalo SMS", "🔄 Tiep tuc")
-    bot.send_message(message.chat.id, "🤖 365OTP Bot\n\nChon chuc nang:", reply_markup=kb)
+    kb.add("💰 Số dư", "📋 Dịch vụ")
+    kb.add("📱 Tạo đơn", "🔍 Kiểm tra")
+    kb.add("📞 Zalo SMS", "🔄 Tiếp tục")
+    bot.send_message(
+        message.chat.id,
+        "🤖 BOT THUÊ SỐ 365OTP\n\nChọn chức năng:",
+        reply_markup=kb
+    )
 
-@bot.message_handler(func=lambda m: m.text == "💰 So du")
+@bot.message_handler(func=lambda m: m.text == "💰 Số dư")
 def balance(message):
     r = get_balance()
-    bot.reply_to(message, f"So du: ${r.get('balance', 0)}" if r.get("status") == 1 else r.get("message"))
+    bot.reply_to(
+        message,
+        f"Số dư: ${r.get('balance', 0)}"
+        if r.get("status") == 1 else r.get("message")
+    )
 
-@bot.message_handler(func=lambda m: m.text == "📋 Dich vu")
+@bot.message_handler(func=lambda m: m.text == "📋 Dịch vụ")
 def services(message):
     r = get_services()
     if isinstance(r, list):
-        text = "Dich vu:\n\n"
+        text = "📋 Dịch vụ:\n\n"
         for s in r[:15]:
             text += f"{s['serviceId']} - {s['name']} (${s['price']})\n"
         bot.reply_to(message, text)
     else:
-        bot.reply_to(message, "Khong lay duoc dich vu")
+        bot.reply_to(message, "❌ Không lấy được dịch vụ")
 
-@bot.message_handler(func=lambda m: m.text == "📱 Tao don")
+@bot.message_handler(func=lambda m: m.text == "📱 Tạo đơn")
 def create(message):
-    msg = bot.reply_to(message, "Nhap: serviceId [countryId] [networkId] [prefix] [true]\nVD: 267 10 viettel !099 true")
+    msg = bot.reply_to(
+        message,
+        "Nhập:\nserviceId [countryId] [networkId] [prefix] [true]\nVD: 267 10 viettel !099 true"
+    )
     bot.register_next_step_handler(msg, process_create)
 
 def process_create(message):
@@ -114,37 +131,54 @@ def process_create(message):
         parts = message.text.split()
         service_id = int(parts[0])
         country_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 10
-        network_id = parts[2] if len(parts) > 2 and parts[2] != "true" else None
+        network_id = None
         prefix = None
         send_sms = "true" in parts
-        for p in parts:
-            if not p.isdigit() and p not in ["true", network_id]:
+
+        for p in parts[2:]:
+            if p.isdigit():
+                continue
+            if p == "true":
+                continue
+            if not network_id:
+                network_id = p
+            else:
                 prefix = p
 
         r = create_order(service_id, country_id, network_id, prefix, send_sms)
         if r.get("status") == 1:
             order_id = r["id"]
             user_orders[message.chat.id] = order_id
-            bot.reply_to(message, f"Tao don thanh cong\nSDT: {r['phone']}\nDon: {order_id}")
-            threading.Thread(target=auto_check, args=(message.chat.id, order_id), daemon=True).start()
+            bot.reply_to(
+                message,
+                f"✅ Tạo đơn thành công\n📱 SĐT: {r['phone']}\n🧾 Mã đơn: {order_id}"
+            )
+            threading.Thread(
+                target=auto_check,
+                args=(message.chat.id, order_id),
+                daemon=True
+            ).start()
         else:
             bot.reply_to(message, r.get("message"))
     except:
-        bot.reply_to(message, "Sai dinh dang")
+        bot.reply_to(message, "❌ Sai định dạng")
 
-@bot.message_handler(func=lambda m: m.text == "🔍 Kiem tra")
+@bot.message_handler(func=lambda m: m.text == "🔍 Kiểm tra")
 def check(message):
     if message.chat.id in user_orders:
         do_check(message, user_orders[message.chat.id])
     else:
-        msg = bot.reply_to(message, "Nhap ma don:")
+        msg = bot.reply_to(message, "Nhập mã đơn:")
         bot.register_next_step_handler(msg, lambda m: do_check(m, int(m.text)))
 
 def do_check(message, order_id):
     r = check_order(order_id)
     if r.get("status") == 1:
         d = r["data"]
-        bot.reply_to(message, f"SDT: {d['phone']}\nOTP: {d.get('code','Dang cho')}")
+        bot.reply_to(
+            message,
+            f"📱 SĐT: {d['phone']}\n🔑 OTP: {d.get('code','Đang chờ')}"
+        )
     else:
         bot.reply_to(message, r.get("message"))
 
@@ -152,15 +186,39 @@ def do_check(message, order_id):
 def zalo(message):
     if message.chat.id in user_orders:
         r = send_zalo_sms(user_orders[message.chat.id])
-        bot.reply_to(message, "Da gui" if r.get("status") == 1 else r.get("message"))
+        bot.reply_to(message, "✅ Đã gửi" if r.get("status") == 1 else r.get("message"))
 
-@bot.message_handler(func=lambda m: m.text == "🔄 Tiep tuc")
+@bot.message_handler(func=lambda m: m.text == "🔄 Tiếp tục")
 def cont(message):
     if message.chat.id in user_orders:
         r = continue_order(user_orders[message.chat.id])
-        bot.reply_to(message, "Da tiep tuc" if r.get("status") == 1 else r.get("message"))
+        bot.reply_to(message, "✅ Đã tiếp tục" if r.get("status") == 1 else r.get("message"))
 
-# ================= RUN ====================
+# ===== WEBHOOK =====
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = telebot.types.Update.de_json(request.get_json())
+    bot.process_new_updates([update])
+    return "OK", 200
+
+@app.route("/")
+def home():
+    return "BOT OTP đang chạy!", 200
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
+# ===== MAIN =====
 if __name__ == "__main__":
-    print("BOT DANG CHAY...")
-    bot.infinity_polling(skip_pending=True)
+    bot.remove_webhook()
+    time.sleep(2)
+
+    webhook_url = f"{SERVICE_URL}/{BOT_TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    print("✅ Webhook:", webhook_url)
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000))
+    )

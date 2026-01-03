@@ -721,7 +721,11 @@ def test_api():
 if __name__ == "__main__":
     try:
         # Setup webhook
-        bot.remove_webhook(drop_pending_updates=True)
+        try:
+            bot.remove_webhook()
+        except Exception as e:
+            logger.warning(f"Remove webhook warning: {e}")
+        
         time.sleep(0.5)
         
         webhook_url = f"{SERVICE_URL}/{BOT_TOKEN}"

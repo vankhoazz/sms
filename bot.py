@@ -14,7 +14,7 @@ from datetime import datetime
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("API_KEY")
 SERVICE_URL = os.getenv("SERVICE_URL")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = os.getenv("ADMIN_ID", "5617674327")
 BASE_URL = "https://365otp.com/apiv1"
 
 # Proxy config (optional)
@@ -746,3 +746,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Startup failed: {e}")
         raise
+
